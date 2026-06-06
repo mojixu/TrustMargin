@@ -1,0 +1,5 @@
+elasticsearch
+numpy
+tqdm
+torch
+transformers
