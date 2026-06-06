@@ -110,6 +110,7 @@ TrustMargin/
 |   |-- inf/
 |   |   `-- trustmargin.sh
 |   `-- retrieve/
+|       |-- index_dpr_wiki.py
 |       `-- bm25_retrieve.sh
 |-- src/
 |   |-- basic.py
@@ -197,7 +198,86 @@ popqa
 Only 2WikiMultihopQA and ComplexWebQuestions dev files are tracked in this
 repository. Place any additional datasets under `data/` in the same format.
 
-### Prepare BM25 Retrieval
+### Download the Wiki Corpus
+
+TrustMargin uses the same BM25 retrieval corpus setup as many open-domain QA
+RAG pipelines. Following PRAG and DPR-style retrieval, we use the DPR
+Wikipedia split corpus `psgs_w100.tsv`.
+
+```bash
+mkdir -p data/dpr
+wget -O data/dpr/psgs_w100.tsv.gz \
+  https://dl.fbaipublicfiles.com/dpr/wikipedia_split/psgs_w100.tsv.gz
+gzip -dk data/dpr/psgs_w100.tsv.gz
+```
+
+After decompression, the corpus should be:
+
+```text
+data/dpr/psgs_w100.tsv
+```
+
+Each row contains a passage id, passage text, and title. The indexing script
+stores these as Elasticsearch fields named `text` and `title`.
+
+### Prepare Elasticsearch
+
+If you already have an Elasticsearch server and a `wiki` index, skip to
+retrieval. Otherwise, one simple local setup is:
+
+```bash
+mkdir -p data
+wget -O data/elasticsearch-8.15.0.tar.gz \
+  https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-8.15.0-linux-x86_64.tar.gz
+tar -xzf data/elasticsearch-8.15.0.tar.gz -C data
+rm data/elasticsearch-8.15.0.tar.gz
+```
+
+For a local research machine, configure a single-node, unauthenticated server:
+
+```bash
+cat >> data/elasticsearch-8.15.0/config/elasticsearch.yml <<'EOF'
+discovery.type: single-node
+xpack.security.enabled: false
+EOF
+```
+
+Start Elasticsearch:
+
+```bash
+data/elasticsearch-8.15.0/bin/elasticsearch -d
+```
+
+Check that it is running:
+
+```bash
+curl http://localhost:9200
+```
+
+### Build the Wiki Index
+
+Index the DPR Wikipedia corpus as an Elasticsearch index named `wiki`:
+
+```bash
+python scripts/retrieve/index_dpr_wiki.py \
+  --data_path data/dpr/psgs_w100.tsv \
+  --index_name wiki \
+  --elastic_url http://localhost:9200 \
+  --reset
+```
+
+Useful checks:
+
+```bash
+curl "http://localhost:9200/_cat/indices?v"
+curl "http://localhost:9200/wiki/_count?pretty"
+```
+
+The retrieval code automatically detects common text fields including `text`,
+`contents`, `body`, `passage`, `paragraph`, `content`, and `txt`, so it can also
+work with an existing index if the corpus has already been indexed elsewhere.
+
+### Retrieve BM25 Passages
 
 If `data_aug/{dataset}/dev.json` already exists, skip this step.
 
@@ -451,3 +531,7 @@ bash -n scripts/inf/trustmargin.sh
 
 If you use this repository, please cite the TrustMargin paper when it becomes
 available.
+
+## Contributor
+
+- [mojixu](https://github.com/mojixu)
