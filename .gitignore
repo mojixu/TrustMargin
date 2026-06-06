@@ -3,7 +3,11 @@ __pycache__/
 .DS_Store
 .venv/
 venv/
-data/
+data/*
+!data/2wikimultihopqa/
+!data/2wikimultihopqa/dev.json
+!data/complexwebquestions/
+!data/complexwebquestions/dev.json
 data_aug/
 outputs/
 models/
