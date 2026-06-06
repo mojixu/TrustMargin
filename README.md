@@ -1,80 +1,278 @@
 # TrustMargin
 
-TrustMargin is a train-free source arbitration method for open-domain QA. For
-each question, it generates a closed-book Direct answer and a BM25-RAG answer
-from the same top-20 retrieved passages, then selects the answer with a
-two-term margin:
+Code for **TrustMargin**, a train-free source arbitration method for
+retrieval-augmented question answering.
+
+TrustMargin asks a deliberately simple inference-time question:
+
+> Should this query trust the model's parametric memory, or the retrieved
+> evidence?
+
+For each input question, TrustMargin generates two candidate answers with the
+same language model:
+
+1. a closed-book **Direct** answer, using the question only;
+2. a **BM25-RAG** answer, using the same fixed top-20 retrieved passages.
+
+It then chooses between the two candidates with a two-term margin:
 
 ```text
 M = M_prior + lambda_bind * M_bind
-select RAG if M > tau, otherwise select Direct
+
+select RAG    if M > tau
+select Direct otherwise
+```
+
+The default setting used in our experiments is:
+
+```text
+lambda_bind = 0.5
+tau         = -1.5
+topk        = 20
+seed        = 42
+```
+
+## Overview
+
+This repository contains the minimal implementation needed to run and analyze
+TrustMargin:
+
+- Direct and BM25-RAG inference wrappers.
+- TrustMargin source arbitration.
+- BM25 retrieval into `data_aug/`.
+- EM/F1 evaluation utilities.
+- Direct/RAG oracle analysis.
+- Margin-component ablation replay.
+- Retrieval-noise robustness analysis.
+- 2WikiMultihopQA and ComplexWebQuestions dev splits used by the project.
+
+The repository intentionally keeps only TrustMargin and the source wrappers
+needed to evaluate it. Historical comparison baselines are not included here.
+
+## What Is TrustMargin?
+
+TrustMargin decomposes source selection into two complementary signals.
+
+### Parametric-prior margin
+
+`M_prior` checks whether the closed-book model itself prefers the RAG answer or
+the Direct answer:
+
+```text
+M_prior = log p_D(y_R | q) - log p_D(y_D | q)
 ```
 
 where:
 
-- `M_prior` measures whether the closed-book model prefers the RAG answer or
-  the Direct answer.
-- `M_bind` measures whether the RAG answer is bound to the
-  question-evidence interaction rather than passage-only context.
+- `q` is the question;
+- `y_D` is the Direct answer;
+- `y_R` is the BM25-RAG answer;
+- `p_D` is the closed-book likelihood under the Direct prompt.
 
-The default setting used in the experiments is:
+If `M_prior` is positive, the model's parametric memory favors the RAG
+candidate. If it is negative, the model favors the Direct candidate.
 
-```text
-lambda_bind = 0.5
-tau = -1.5
-topk = 20
-seed = 42
-```
+### Evidence-binding margin
 
-## Repository Layout
+`M_bind` checks whether an answer is supported by the interaction between the
+question and the retrieved passages, rather than by passage-only prior:
 
 ```text
-src/
-  basic.py                      # shared model interfaces
-  data.py                       # QA dataset loading, inference, evaluation
-  evaluate.py                   # EM/F1 evaluation utilities
-  ICL.py                        # Direct and BM25-RAG prompt/generation wrapper
-  inference.py                  # clean entrypoint: direct, bm25-rag, trustmargin
-  retrieve.py                   # BM25 retrieval into data_aug/*
-  trustmargin.py                # TrustMargin method implementation
-  trustmargin_noise_robustness.py
-
-scripts/
-  retrieve/bm25_retrieve.sh
-  inf/trustmargin.sh
-  analyze/direct_bm25_oracle.py
-  analysis/replay_trustmargin_component_ablation.py
-  analysis/run_trustmargin_noise_robustness_*.sh
+M_bind =
+    [log p_R(y_R | q, P) - log p_C(y_R | P)]
+  - [log p_R(y_D | q, P) - log p_C(y_D | P)]
 ```
 
-The repository intentionally keeps only TrustMargin and the minimal Direct /
-BM25-RAG source wrappers needed to run and evaluate the method.
+where:
 
-## Data
+- `P` is the retrieved top-k passage pool;
+- `p_R` is the evidence-conditioned likelihood under the RAG prompt;
+- `p_C` is the context-only likelihood with the question removed.
 
-Raw datasets should be placed under `data/{dataset}/dev.json`. Retrieved
-top-20 passages should be placed under `data_aug/{dataset}/dev.json` with the
-same QA fields plus:
+This term rewards answers that are bound to question-conditioned evidence and
+penalizes answers that merely look plausible from retrieved text alone.
+
+## What's Included?
+
+```text
+TrustMargin/
+|-- data/
+|   |-- 2wikimultihopqa/dev.json
+|   `-- complexwebquestions/dev.json
+|-- scripts/
+|   |-- analysis/
+|   |   |-- replay_trustmargin_component_ablation.py
+|   |   |-- run_trustmargin_noise_robustness_1b.sh
+|   |   |-- run_trustmargin_noise_robustness_1b3b_dense.sh
+|   |   `-- run_trustmargin_noise_robustness_8b_dense.sh
+|   |-- analyze/
+|   |   `-- direct_bm25_oracle.py
+|   |-- inf/
+|   |   `-- trustmargin.sh
+|   `-- retrieve/
+|       `-- bm25_retrieve.sh
+|-- src/
+|   |-- basic.py
+|   |-- data.py
+|   |-- evaluate.py
+|   |-- ICL.py
+|   |-- inference.py
+|   |-- retrieve.py
+|   |-- trustmargin.py
+|   `-- trustmargin_noise_robustness.py
+|-- requirements.txt
+`-- README.md
+```
+
+## Reproduce TrustMargin
+
+The standard workflow is:
+
+1. install the Python environment;
+2. prepare raw QA data;
+3. retrieve BM25 top-20 passages;
+4. run Direct, BM25-RAG, and TrustMargin;
+5. run diagnostic replay scripts.
+
+### Install Environment
+
+Install the Python dependencies:
+
+```bash
+conda create -n trustmargin python=3.10
+conda activate trustmargin
+pip install -r requirements.txt
+```
+
+or with `uv`:
+
+```bash
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+```
+
+The repository uses HuggingFace causal language models. Install a PyTorch build
+that matches your CUDA version if the default `pip` package is not suitable for
+your machine.
+
+### Prepare Data
+
+Raw datasets are stored under `data/{dataset}/dev.json`. Each example should
+contain:
 
 ```json
 {
-  "passages": ["passage 1", "passage 2"]
+  "test_id": "...",
+  "question": "...",
+  "answer": "..."
 }
 ```
 
-To build `data_aug` from an Elasticsearch BM25 index:
+This repository includes:
+
+```text
+data/2wikimultihopqa/dev.json
+data/complexwebquestions/dev.json
+```
+
+BM25-RAG and TrustMargin require retrieved passages. Augmented files should be
+stored under `data_aug/{dataset}/dev.json` with the same fields plus:
+
+```json
+{
+  "passages": ["passage 1", "passage 2", "passage 3"]
+}
+```
+
+The code also supports the dataset names used in the project:
+
+```text
+2wikimultihopqa
+complexwebquestions
+hotpotqa
+popqa
+```
+
+Only 2WikiMultihopQA and ComplexWebQuestions dev files are tracked in this
+repository. Place any additional datasets under `data/` in the same format.
+
+### Prepare BM25 Retrieval
+
+If `data_aug/{dataset}/dev.json` already exists, skip this step.
+
+The retrieval script assumes that Elasticsearch is running and that the wiki
+corpus has already been indexed. By default, it queries an index named `wiki`.
 
 ```bash
 bash scripts/retrieve/bm25_retrieve.sh
 ```
 
-## Run TrustMargin
+Environment variables:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `K` | `20` | Number of passages retrieved per question. |
+| `NUM_THREADS` | `32` | Retrieval worker threads. |
+| `INDEX_NAME` | `wiki` | Elasticsearch index name. |
+| `ELASTIC_URL` | `http://localhost:9200` | Elasticsearch endpoint. |
+
+Equivalent Python command:
+
+```bash
+python src/retrieve.py \
+  --dataset all \
+  --split dev \
+  --data_root data \
+  --output_root data_aug \
+  --elastic_url http://localhost:9200 \
+  --index_name wiki \
+  --k 20 \
+  --num_threads 32
+```
+
+## Inference
+
+All inference methods use `src/inference.py`.
+
+| Method | Context | Description |
+| --- | --- | --- |
+| `direct` | none | Closed-book answer generation. |
+| `bm25-rag` | BM25 top-k passages | Standard retrieval-augmented generation. |
+| `trustmargin` | BM25 top-k passages | Selects between Direct and BM25-RAG answers. |
+
+### Direct
+
+```bash
+python src/inference.py \
+  --method direct \
+  --model_path /path/to/model \
+  --dataset all \
+  --data_root data \
+  --prediction_file outputs/1b/direct.json
+```
+
+### BM25-RAG@20
+
+```bash
+python src/inference.py \
+  --method bm25-rag \
+  --model_path /path/to/model \
+  --dataset all \
+  --data_aug_root data_aug \
+  --prediction_file outputs/1b/rag_at_20.json \
+  --topk 20
+```
+
+### TrustMargin
+
+The convenience script runs TrustMargin with the default hyperparameters:
 
 ```bash
 bash scripts/inf/trustmargin.sh
 ```
 
-or directly:
+You can also call the Python entry directly:
 
 ```bash
 python src/inference.py \
@@ -84,26 +282,172 @@ python src/inference.py \
   --data_aug_root data_aug \
   --prediction_file outputs/1b/trustmargin.json \
   --topk 20 \
+  --max_context_len 2048 \
+  --max_new_tokens 32 \
   --trustmargin_lambda_bind 0.5 \
   --trustmargin_tau -1.5
 ```
 
-The output JSON keeps a stable per-example structure:
+Main arguments:
+
+| Argument | Default | Description |
+| --- | --- | --- |
+| `--method` | required | `direct`, `bm25-rag`, or `trustmargin`. |
+| `--model_path` | required | HuggingFace model path or name. |
+| `--dataset` | `all` | Dataset name or `all`. |
+| `--datasets` | `None` | Optional explicit dataset list. |
+| `--data_root` | `data` | Root for raw QA files. |
+| `--data_aug_root` | `data_aug` | Root for retrieved-passage files. |
+| `--prediction_file` | auto | Output JSON path. |
+| `--num_samples_for_eval` | `-1` | Use a subset for smoke tests; `-1` means all. |
+| `--topk` | `20` | Number of passages used by RAG/TrustMargin. |
+| `--max_context_len` | `2048` | Maximum context tokens before generation. |
+| `--max_new_tokens` | `20` | Maximum generation length. |
+| `--seed` | `42` | Random seed. |
+| `--device_map` | `auto` | HuggingFace device map; use `none` for manual CUDA placement. |
+| `--torch_dtype` | `float16` | `auto`, `float16`, `bfloat16`, or `float32`. |
+| `--trustmargin_lambda_bind` | `0.5` | Weight on the evidence-binding margin. |
+| `--trustmargin_tau` | `-1.5` | Source-selection threshold. |
+
+## Output Format
+
+Prediction files are JSON objects with one entry per dataset:
 
 ```json
 {
-  "test_id": "...",
-  "question": "...",
-  "answer": "...",
-  "prediction": "...",
-  "raw_output": "...",
-  "score": {"em": 0, "f1": 0.0},
-  "passages": ["..."],
-  "method_debug": {
-    "direct_answer": "...",
-    "rag_answer": "...",
-    "selected_source": "direct",
-    "margins": {"M_prior": 0.0, "M_bind": 0.0}
+  "method": "trustmargin",
+  "datasets": {
+    "2wikimultihopqa": {
+      "records": [
+        {
+          "test_id": "...",
+          "question": "...",
+          "answer": "...",
+          "prediction": "...",
+          "raw_output": "...",
+          "score": {
+            "em": 0,
+            "f1": 0.0
+          },
+          "passages": ["..."],
+          "method_debug": {
+            "method": "TrustMargin",
+            "direct_answer": "...",
+            "rag_answer": "...",
+            "selected_source": "direct",
+            "margin": 0.0,
+            "margins": {
+              "M_prior": 0.0,
+              "M_bind": 0.0
+            }
+          }
+        }
+      ]
+    }
   }
 }
 ```
+
+Gold answers are used only for evaluation scores and analysis scripts. They are
+not used by TrustMargin when selecting the source.
+
+## Analysis Scripts
+
+### Direct/RAG oracle analysis
+
+This script measures the candidate oracle between Direct and BM25-RAG@20 and
+counts where the two sources agree or disagree.
+
+```bash
+python scripts/analyze/direct_bm25_oracle.py \
+  --outputs_root outputs \
+  --models 1b 3b 8b \
+  --datasets 2wikimultihopqa complexwebquestions \
+  --rag_file rag_at_20.json \
+  --output_json outputs/analysis/direct_bm25_oracle.json \
+  --output_md outputs/analysis/direct_bm25_oracle.md
+```
+
+### Margin-component ablation
+
+This replay script uses existing TrustMargin outputs and does not rerun the
+language model.
+
+```bash
+python scripts/analysis/replay_trustmargin_component_ablation.py \
+  --input_paths outputs/1b/trustmargin.json outputs/3b/trustmargin.json outputs/8b/trustmargin.json \
+  --model_names 1b 3b 8b \
+  --datasets 2wikimultihopqa complexwebquestions \
+  --lambda_bind 0.5 \
+  --tau -1.5
+```
+
+It reports:
+
+- full TrustMargin: `M_prior + lambda_bind * M_bind`;
+- without the parametric-prior term: `M_bind`;
+- without the evidence-binding term: `M_prior`.
+
+### Retrieval-noise robustness
+
+The noise robustness scripts perturb the retrieved top-20 passage pool and
+measure how TrustMargin's RAG-selection rate changes.
+
+```bash
+bash scripts/analysis/run_trustmargin_noise_robustness_1b.sh
+```
+
+Dense sweeps for 1B/3B and 8B are also provided:
+
+```bash
+bash scripts/analysis/run_trustmargin_noise_robustness_1b3b_dense.sh
+bash scripts/analysis/run_trustmargin_noise_robustness_8b_dense.sh
+```
+
+## Smoke Test
+
+After preparing `data_aug/`, run a small subset before launching full
+experiments:
+
+```bash
+python src/inference.py \
+  --method trustmargin \
+  --model_path /path/to/model \
+  --dataset 2wikimultihopqa \
+  --data_aug_root data_aug \
+  --prediction_file outputs/smoke/trustmargin_2wiki_2.json \
+  --num_samples_for_eval 2 \
+  --topk 20
+```
+
+Static checks:
+
+```bash
+python -m py_compile \
+  src/basic.py \
+  src/data.py \
+  src/evaluate.py \
+  src/ICL.py \
+  src/inference.py \
+  src/retrieve.py \
+  src/trustmargin.py \
+  src/trustmargin_noise_robustness.py
+
+bash -n scripts/retrieve/bm25_retrieve.sh
+bash -n scripts/inf/trustmargin.sh
+```
+
+## Notes
+
+- TrustMargin is train-free: it does not update model weights and does not use
+  a separate judge model.
+- TrustMargin uses the same top-k passage pool as BM25-RAG. It does not access
+  additional retrieval results during source selection.
+- The default comparison setting is Direct vs BM25-RAG@20.
+- For reproducibility, keep the model path, top-k, decoding settings,
+  `lambda_bind`, `tau`, and random seed fixed across methods.
+
+## Citation
+
+If you use this repository, please cite the TrustMargin paper when it becomes
+available.
