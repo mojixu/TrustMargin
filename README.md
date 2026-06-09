@@ -1,6 +1,6 @@
 # TrustMargin
 
-Code for **TrustMargin**, a train-free source arbitration method for
+Code for **TrustMargin**, a training-free source arbitration method for
 retrieval-augmented question answering.
 
 TrustMargin asks a deliberately simple inference-time question:
@@ -34,16 +34,12 @@ seed        = 42
 
 ## Overview
 
-This repository contains the minimal implementation needed to run and analyze
-TrustMargin:
+This repository contains the minimal implementation needed to run TrustMargin:
 
 - Direct and BM25-RAG inference wrappers.
 - TrustMargin source arbitration.
 - BM25 retrieval into `data_aug/`.
 - EM/F1 evaluation utilities.
-- Direct/RAG oracle analysis.
-- Margin-component ablation replay.
-- Retrieval-noise robustness analysis.
 - 2WikiMultihopQA and ComplexWebQuestions dev splits used by the project.
 
 The repository intentionally keeps only TrustMargin and the source wrappers
@@ -100,13 +96,6 @@ TrustMargin/
 |   |-- 2wikimultihopqa/dev.json
 |   `-- complexwebquestions/dev.json
 |-- scripts/
-|   |-- analysis/
-|   |   |-- replay_trustmargin_component_ablation.py
-|   |   |-- run_trustmargin_noise_robustness_1b.sh
-|   |   |-- run_trustmargin_noise_robustness_1b3b_dense.sh
-|   |   `-- run_trustmargin_noise_robustness_8b_dense.sh
-|   |-- analyze/
-|   |   `-- direct_bm25_oracle.py
 |   |-- inf/
 |   |   `-- trustmargin.sh
 |   `-- retrieve/
@@ -119,8 +108,7 @@ TrustMargin/
 |   |-- ICL.py
 |   |-- inference.py
 |   |-- retrieve.py
-|   |-- trustmargin.py
-|   `-- trustmargin_noise_robustness.py
+|   `-- trustmargin.py
 |-- requirements.txt
 `-- README.md
 ```
@@ -132,8 +120,7 @@ The standard workflow is:
 1. install the Python environment;
 2. prepare raw QA data;
 3. retrieve BM25 top-20 passages;
-4. run Direct, BM25-RAG, and TrustMargin;
-5. run diagnostic replay scripts.
+4. run Direct, BM25-RAG, and TrustMargin.
 
 ### Install Environment
 
@@ -186,17 +173,15 @@ stored under `data_aug/{dataset}/dev.json` with the same fields plus:
 }
 ```
 
-The code also supports the dataset names used in the project:
+The supported dataset names are:
 
 ```text
 2wikimultihopqa
 complexwebquestions
-hotpotqa
-popqa
 ```
 
-Only 2WikiMultihopQA and ComplexWebQuestions dev files are tracked in this
-repository. Place any additional datasets under `data/` in the same format.
+Place augmented BM25 retrieval outputs for these datasets under `data_aug/` in
+the same format before running BM25-RAG or TrustMargin.
 
 ### Download the Wiki Corpus
 
@@ -379,7 +364,7 @@ Main arguments:
 | `--data_root` | `data` | Root for raw QA files. |
 | `--data_aug_root` | `data_aug` | Root for retrieved-passage files. |
 | `--prediction_file` | auto | Output JSON path. |
-| `--num_samples_for_eval` | `-1` | Use a subset for smoke tests; `-1` means all. |
+| `--num_samples_for_eval` | `-1` | Use a subset for evaluation; `-1` means all. |
 | `--topk` | `20` | Number of passages used by RAG/TrustMargin. |
 | `--max_context_len` | `2048` | Maximum context tokens before generation. |
 | `--max_new_tokens` | `20` | Maximum generation length. |
@@ -428,98 +413,12 @@ Prediction files are JSON objects with one entry per dataset:
 }
 ```
 
-Gold answers are used only for evaluation scores and analysis scripts. They are
-not used by TrustMargin when selecting the source.
-
-## Analysis Scripts
-
-### Direct/RAG oracle analysis
-
-This script measures the candidate oracle between Direct and BM25-RAG@20 and
-counts where the two sources agree or disagree.
-
-```bash
-python scripts/analyze/direct_bm25_oracle.py \
-  --outputs_root outputs \
-  --models 1b 3b 8b \
-  --datasets 2wikimultihopqa complexwebquestions \
-  --rag_file rag_at_20.json \
-  --output_json outputs/analysis/direct_bm25_oracle.json \
-  --output_md outputs/analysis/direct_bm25_oracle.md
-```
-
-### Margin-component ablation
-
-This replay script uses existing TrustMargin outputs and does not rerun the
-language model.
-
-```bash
-python scripts/analysis/replay_trustmargin_component_ablation.py \
-  --input_paths outputs/1b/trustmargin.json outputs/3b/trustmargin.json outputs/8b/trustmargin.json \
-  --model_names 1b 3b 8b \
-  --datasets 2wikimultihopqa complexwebquestions \
-  --lambda_bind 0.5 \
-  --tau -1.5
-```
-
-It reports:
-
-- full TrustMargin: `M_prior + lambda_bind * M_bind`;
-- without the parametric-prior term: `M_bind`;
-- without the evidence-binding term: `M_prior`.
-
-### Retrieval-noise robustness
-
-The noise robustness scripts perturb the retrieved top-20 passage pool and
-measure how TrustMargin's RAG-selection rate changes.
-
-```bash
-bash scripts/analysis/run_trustmargin_noise_robustness_1b.sh
-```
-
-Dense sweeps for 1B/3B and 8B are also provided:
-
-```bash
-bash scripts/analysis/run_trustmargin_noise_robustness_1b3b_dense.sh
-bash scripts/analysis/run_trustmargin_noise_robustness_8b_dense.sh
-```
-
-## Smoke Test
-
-After preparing `data_aug/`, run a small subset before launching full
-experiments:
-
-```bash
-python src/inference.py \
-  --method trustmargin \
-  --model_path /path/to/model \
-  --dataset 2wikimultihopqa \
-  --data_aug_root data_aug \
-  --prediction_file outputs/smoke/trustmargin_2wiki_2.json \
-  --num_samples_for_eval 2 \
-  --topk 20
-```
-
-Static checks:
-
-```bash
-python -m py_compile \
-  src/basic.py \
-  src/data.py \
-  src/evaluate.py \
-  src/ICL.py \
-  src/inference.py \
-  src/retrieve.py \
-  src/trustmargin.py \
-  src/trustmargin_noise_robustness.py
-
-bash -n scripts/retrieve/bm25_retrieve.sh
-bash -n scripts/inf/trustmargin.sh
-```
+Gold answers are used only for evaluation scores. They are not used by
+TrustMargin when selecting the source.
 
 ## Notes
 
-- TrustMargin is train-free: it does not update model weights and does not use
+- TrustMargin is training-free: it does not update model weights and does not use
   a separate judge model.
 - TrustMargin uses the same top-k passage pool as BM25-RAG. It does not access
   additional retrieval results during source selection.
@@ -529,8 +428,20 @@ bash -n scripts/inf/trustmargin.sh
 
 ## Citation
 
-If you use this repository, please cite the TrustMargin paper when it becomes
-available.
+If you use this repository, please cite:
+
+```bibtex
+@misc{xu2026trustmargin,
+  title = {TrustMargin: Training-Free Arbitration between Parametric Memory and Retrieved Evidence in Large Language Models},
+  author = {Jingyan Xu and Hong Shi and Yi Shan and Penghui Liu and Yunhao Bai and Ningyuan Li and Xueyang Liu},
+  year = {2026},
+  eprint = {2606.08397},
+  archivePrefix = {arXiv},
+  primaryClass = {cs.CL},
+  doi = {10.48550/arXiv.2606.08397},
+  url = {https://arxiv.org/abs/2606.08397}
+}
+```
 
 ## Contributor
 

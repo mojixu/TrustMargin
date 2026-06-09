@@ -13,8 +13,6 @@ logger = logging.getLogger(__name__)
 DATASET_NAMES = [
     "2wikimultihopqa",
     "complexwebquestions",
-    "hotpotqa",
-    "popqa",
 ]
 
 

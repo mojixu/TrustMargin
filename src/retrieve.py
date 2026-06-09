@@ -14,8 +14,6 @@ from tqdm import tqdm
 DATASET_NAMES = [
     "2wikimultihopqa",
     "complexwebquestions",
-    "hotpotqa",
-    "popqa",
 ]
 TEXT_FIELD_PRIORITY = ["contents", "text", "body", "passage", "paragraph", "content", "txt"]
 TITLE_FIELD_PRIORITY = ["title", "doc_title", "name"]
